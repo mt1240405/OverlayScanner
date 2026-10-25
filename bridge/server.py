@@ -4,6 +4,7 @@ import time
 import threading
 from flask import Flask, request, jsonify, abort
 from PIL import Image
+from PIL import ImageOps, ImageEnhance, ImageFilter
 import pytesseract
 
 pytesseract.pytesseract.tesseract_cmd = os.environ.get(
@@ -35,7 +36,26 @@ def screenshot():
     except Exception:
         return jsonify({"error": "Invalid image"}), 400
 
-    text = pytesseract.image_to_string(image, config="--psm 11")
+    # Convert to grayscale and increase contrast.
+    processed = ImageOps.grayscale(image)
+    processed = ImageOps.autocontrast(processed)
+
+    # Enlarge text to make individual digits easier to distinguish.
+    processed = processed.resize(
+        (processed.width * 3, processed.height * 3),
+        Image.Resampling.LANCZOS
+    )
+
+    processed = ImageEnhance.Contrast(processed).enhance(2.0)
+    processed = processed.filter(ImageFilter.SHARPEN)
+
+    # Recognize digits only; ignore other screen text and icons.
+    ocr_config = (
+        "--oem 3 --psm 11 "
+        "-c tessedit_char_whitelist=0123456789"
+    )
+
+    text = pytesseract.image_to_string(processed, config=ocr_config)
     print("OCR TEXT:", repr(text))
     image.save("debug_screenshot.png")
     print("Screenshot size:", image.size)
