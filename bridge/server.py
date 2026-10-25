@@ -2,7 +2,6 @@ import os
 import re
 import time
 import threading
-from collections import Counter
 
 from flask import Flask, request, jsonify, abort
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter
@@ -16,12 +15,14 @@ pytesseract.pytesseract.tesseract_cmd = os.environ.get(
 app = Flask(__name__)
 
 TOKEN = os.environ.get("BRIDGE_TOKEN", "change-this-dev-token")
+ID_PATTERN = re.compile(r"(?<!\d)\d{8}(?!\d)")
 
+# Holds only the current scan status/ID for the existing /latest endpoint.
+# OCR text and image data are never stored here.
 latest = {
     "id": None,
     "created_at": 0,
-    "status": "waiting",
-    "ocr_preview": ""
+    "status": "waiting"
 }
 
 lock = threading.Lock()
@@ -32,102 +33,54 @@ def require_auth():
         abort(401)
 
 
-def preprocess_variants(image):
-    gray = ImageOps.grayscale(image)
-    gray = ImageOps.autocontrast(gray)
-
-    # Full screenshot: enlarged, sharpened.
-    full = gray.resize(
-        (gray.width * 2, gray.height * 2),
-        Image.Resampling.LANCZOS
-    )
-    full = ImageEnhance.Contrast(full).enhance(1.8)
-    full = full.filter(ImageFilter.SHARPEN)
-
-    # Inverted screenshot: useful for light text on a dark background.
-    inverted = ImageOps.invert(gray)
-    inverted = inverted.resize(
-        (inverted.width * 2, inverted.height * 2),
-        Image.Resampling.LANCZOS
-    )
-    inverted = ImageEnhance.Contrast(inverted).enhance(1.8)
-    inverted = inverted.filter(ImageFilter.SHARPEN)
-
-    # Crop the likely ID area for debugging and optional OCR.
-    left = int(image.width * 0.03)
-    right = int(image.width * 0.55)
-    top = int(image.height * 0.15)
-    bottom = int(image.height * 0.30)
-
-    crop = gray.crop((left, top, right, bottom))
-    crop = crop.resize(
-        (crop.width * 4, crop.height * 4),
-        Image.Resampling.LANCZOS
-    )
-    crop = ImageEnhance.Contrast(crop).enhance(2.0)
-    crop = crop.filter(ImageFilter.SHARPEN)
-    crop = ImageOps.expand(crop, border=20, fill=255)
-    crop.save("debug_crop.png")
-
-    return [
-        ("full_psm6", full, 6),
-        ("inverted_psm11", inverted, 11),
-        ("full_psm11", full, 11),
-        ("crop_psm6", crop, 6),
-    ]
-
-
 def extract_booking_id(image):
-    base_config = (
-        "--oem 3 "
-        "-c tessedit_char_whitelist=0123456789 "
-        "-c load_system_dawg=0 "
-        "-c load_freq_dawg=0"
-    )
+    """Run one OCR attempt and discard OCR text after extracting the ID."""
+    processed = None
+    text = None
 
-    candidates = []
-    previews = []
+    try:
+        processed = ImageOps.grayscale(image)
+        processed = ImageOps.autocontrast(processed)
 
-    for name, processed, psm in preprocess_variants(image):
-        config = f"{base_config} --psm {psm}"
+        processed = processed.resize(
+            (processed.width * 2, processed.height * 2),
+            Image.Resampling.LANCZOS
+        )
 
-        try:
-            raw_text = pytesseract.image_to_string(
-                processed,
-                config=config
-            ).strip()
-        except Exception as exc:
-            print(f"OCR error ({name}): {exc}")
-            continue
+        processed = ImageEnhance.Contrast(processed).enhance(1.8)
+        processed = processed.filter(ImageFilter.SHARPEN)
 
-        print(f"OCR {name}: {raw_text!r}")
-        previews.append(f"{name}: {raw_text}")
+        ocr_config = (
+            "--oem 3 --psm 6 "
+            "-c tessedit_char_whitelist=0123456789 "
+            "-c load_system_dawg=0 "
+            "-c load_freq_dawg=0"
+        )
 
-        # Accept only standalone eight-digit sequences.
-        matches = re.findall(r"(?<!\d)\d{8}(?!\d)", raw_text)
-        candidates.extend(matches)
+        # OCR runs immediately and synchronously for this scan.
+        text = pytesseract.image_to_string(
+            processed,
+            config=ocr_config
+        )
 
-    print("OCR CANDIDATES:", candidates)
+        matches = ID_PATTERN.findall(text)
+        unique_ids = list(dict.fromkeys(matches))
 
-    if not candidates:
-        return None, "\n".join(previews)[:500]
+        # Do not guess if multiple distinct IDs are detected.
+        if len(unique_ids) == 1:
+            return unique_ids[0]
 
-    counts = Counter(candidates)
-    best_id, best_count = counts.most_common(1)[0]
+        if len(unique_ids) > 1:
+            print("Multiple IDs detected; scan rejected.")
 
-    # If different IDs have equal support, don't guess.
-    tied = [
-        candidate
-        for candidate, count in counts.items()
-        if count == best_count
-    ]
+        return None
 
-    if len(tied) != 1:
-        print("OCR candidates disagree:", dict(counts))
-        return None, "\n".join(previews)[:500]
-
-    print("SELECTED ID:", best_id)
-    return best_id, "\n".join(previews)[:500]
+    finally:
+        # Release image-processing objects and OCR text.
+        text = None
+        if processed is not None:
+            processed.close()
+        processed = None
 
 
 @app.get("/health")
@@ -144,35 +97,61 @@ def screenshot():
             "error": "Expected multipart file field named image"
         }), 400
 
+    # Clear previous scan state immediately for a fresh scan.
+    with lock:
+        latest.update({
+            "id": None,
+            "created_at": 0,
+            "status": "processing"
+        })
+
+    image = None
+
     try:
         image = Image.open(
             request.files["image"].stream
         ).convert("RGB")
-    except Exception:
-        return jsonify({"error": "Invalid image"}), 400
 
-    image.save("debug_screenshot.png")
-    print("Screenshot size:", image.size)
-    print("Image mode:", image.mode)
+        print("New scan received; starting OCR.")
 
-    found, ocr_preview = extract_booking_id(image)
+        found = extract_booking_id(image)
 
-    with lock:
-        latest.update({
-            "id": found,
-            "created_at": time.time(),
+        with lock:
+            latest.update({
+                "id": found,
+                "created_at": time.time(),
+                "status": "id_found" if found else "no_id_found"
+            })
+
+        print("Scan completed:", "ID found" if found else "No ID found")
+
+        # Return the result directly; no OCR text or screenshot is returned.
+        return jsonify({
             "status": "id_found" if found else "no_id_found",
-            "ocr_preview": ocr_preview
+            "id": found
         })
-        response = latest.copy()
 
-    print("FINAL RESULT:", response["status"], response["id"])
+    except Exception as exc:
+        print("Scan failed:", type(exc).__name__)
 
-    return jsonify({
-        "status": response["status"],
-        "id": response["id"],
-        "ocr_preview": response["ocr_preview"]
-    })
+        with lock:
+            latest.update({
+                "id": None,
+                "created_at": time.time(),
+                "status": "error"
+            })
+
+        return jsonify({
+            "status": "error",
+            "id": None
+        }), 500
+
+    finally:
+        if image is not None:
+            image.close()
+
+        # Remove the uploaded file reference from this request.
+        request.files.pop("image", None)
 
 
 @app.get("/latest")
@@ -185,13 +164,14 @@ def get_latest():
 @app.post("/ack")
 def ack():
     require_auth()
+
     with lock:
         latest.update({
             "id": None,
             "created_at": 0,
-            "status": "waiting",
-            "ocr_preview": ""
+            "status": "waiting"
         })
+
     return jsonify({"ok": True})
 
 

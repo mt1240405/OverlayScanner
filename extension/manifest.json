@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Screen to Ctrl+F",
-  "version": "0.2.0",
-  "description": "Receives an ID from the screenshot bridge and searches for it in an open Google Sheets tab.",
+  "version": "0.4.0",
+  "description": "Receives a booking ID from the screenshot bridge and searches only the active or specifically targeted open Google Sheet.",
   "permissions": [
     "storage",
     "alarms",

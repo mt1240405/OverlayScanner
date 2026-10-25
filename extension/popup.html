@@ -9,18 +9,21 @@ label{display:block;margin-top:10px;font-weight:600}
 input{box-sizing:border-box;width:100%;padding:7px;margin-top:4px}
 button{margin:12px 6px 0 0;padding:9px 12px;cursor:pointer}
 #status{white-space:pre-wrap;margin-top:12px;background:#f1f3f4;padding:9px;border-radius:6px}
+small{display:block;color:#5f6368;margin-top:4px;line-height:1.35}
 </style>
 </head>
 <body>
 <h2>Screen → Ctrl+F</h2>
 <label>Bridge URL</label><input id="bridge" value="http://192.168.1.25:8765">
 <label>Bridge token</label><input id="token" type="password" value="change-this-dev-token">
-<label>Sheets URL contains</label><input id="urlMatch" value="docs.google.com/spreadsheets">
+<label>Target Google Sheets URL (optional)</label>
+<input id="urlMatch" value="docs.google.com/spreadsheets" placeholder="Paste exact sheet URL or leave default">
+<small>No fallback is used. Leave the default filter to search only the active Google Sheets tab, or paste a full URL to target only that exact open sheet.</small>
 <button id="save">Save settings</button>
 <button id="start">Start polling</button>
 <button id="stop">Stop</button>
 <div id="status">1. Start the Python bridge.
-2. Open a Google Sheet in Chrome.
+2. Open or activate the target Google Sheet.
 3. Save settings and start polling.</div>
 <script src="popup.js"></script>
 </body>
