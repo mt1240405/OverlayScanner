@@ -8,10 +8,7 @@ import pytesseract
 
 app = Flask(__name__)
 TOKEN = os.environ.get("BRIDGE_TOKEN", "change-this-dev-token")
-ID_PATTERN = re.compile(
-    os.environ.get("ID_REGEX", r"\b(?=[A-Z0-9_-]{5,40}\b)(?=.*\d)[A-Z0-9_-]+\b"),
-    re.I,
-)
+ID_PATTERN = re.compile(r"\b\d{8}\b")
 latest = {"id": None, "created_at": 0, "status": "waiting", "ocr_preview": ""}
 lock = threading.Lock()
 
