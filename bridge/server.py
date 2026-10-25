@@ -2,6 +2,7 @@ import os
 import re
 import time
 import threading
+from collections import Counter
 
 from flask import Flask, request, jsonify, abort
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter
@@ -15,7 +16,6 @@ pytesseract.pytesseract.tesseract_cmd = os.environ.get(
 app = Flask(__name__)
 
 TOKEN = os.environ.get("BRIDGE_TOKEN", "change-this-dev-token")
-ID_PATTERN = re.compile(r"(?<!\d)\d{8}(?!\d)")
 
 latest = {
     "id": None,
@@ -23,6 +23,7 @@ latest = {
     "status": "waiting",
     "ocr_preview": ""
 }
+
 lock = threading.Lock()
 
 
@@ -32,11 +33,10 @@ def require_auth():
 
 
 def preprocess_variants(image):
-    """Create several image versions for OCR."""
     gray = ImageOps.grayscale(image)
     gray = ImageOps.autocontrast(gray)
 
-    # Full screenshot, enlarged.
+    # Full screenshot: enlarged, sharpened.
     full = gray.resize(
         (gray.width * 2, gray.height * 2),
         Image.Resampling.LANCZOS
@@ -44,36 +44,37 @@ def preprocess_variants(image):
     full = ImageEnhance.Contrast(full).enhance(1.8)
     full = full.filter(ImageFilter.SHARPEN)
 
-    variants = [("full", full)]
-
-    # Try the likely ID area on a 1080x2400 screenshot.
-    # If the ID is elsewhere, the full screenshot is still tested.
-    left = int(image.width * 0.03)
-    right = int(image.width * 0.55)
-    top = int(image.height * 0.15)
-    bottom = int(image.height * 0.30)
-
-    if right > left and bottom > top:
-        crop = gray.crop((left, top, right, bottom))
-        crop = crop.resize(
-            (crop.width * 4, crop.height * 4),
-            Image.Resampling.LANCZOS
-        )
-        crop = ImageEnhance.Contrast(crop).enhance(2.0)
-        crop = crop.filter(ImageFilter.SHARPEN)
-        crop = ImageOps.expand(crop, border=20, fill=255)
-        variants.append(("crop", crop))
-
-    # Also test inverted colors, useful for light text on dark backgrounds.
+    # Inverted screenshot: useful for light text on a dark background.
     inverted = ImageOps.invert(gray)
     inverted = inverted.resize(
         (inverted.width * 2, inverted.height * 2),
         Image.Resampling.LANCZOS
     )
     inverted = ImageEnhance.Contrast(inverted).enhance(1.8)
-    variants.append(("inverted", inverted))
+    inverted = inverted.filter(ImageFilter.SHARPEN)
 
-    return variants
+    # Crop the likely ID area for debugging and optional OCR.
+    left = int(image.width * 0.03)
+    right = int(image.width * 0.55)
+    top = int(image.height * 0.15)
+    bottom = int(image.height * 0.30)
+
+    crop = gray.crop((left, top, right, bottom))
+    crop = crop.resize(
+        (crop.width * 4, crop.height * 4),
+        Image.Resampling.LANCZOS
+    )
+    crop = ImageEnhance.Contrast(crop).enhance(2.0)
+    crop = crop.filter(ImageFilter.SHARPEN)
+    crop = ImageOps.expand(crop, border=20, fill=255)
+    crop.save("debug_crop.png")
+
+    return [
+        ("full_psm6", full, 6),
+        ("inverted_psm11", inverted, 11),
+        ("full_psm11", full, 11),
+        ("crop_psm6", crop, 6),
+    ]
 
 
 def extract_booking_id(image):
@@ -87,57 +88,46 @@ def extract_booking_id(image):
     candidates = []
     previews = []
 
-    for variant_name, processed in preprocess_variants(image):
-        if variant_name == "crop":
-            processed.save("debug_crop.png")
+    for name, processed, psm in preprocess_variants(image):
+        config = f"{base_config} --psm {psm}"
 
-        for psm in (6, 7, 8, 11, 13):
-            config = f"{base_config} --psm {psm}"
+        try:
+            raw_text = pytesseract.image_to_string(
+                processed,
+                config=config
+            ).strip()
+        except Exception as exc:
+            print(f"OCR error ({name}): {exc}")
+            continue
 
-            try:
-                raw_text = pytesseract.image_to_string(
-                    processed,
-                    config=config
-                ).strip()
-            except Exception as exc:
-                print(f"OCR error ({variant_name}, PSM {psm}): {exc}")
-                continue
+        print(f"OCR {name}: {raw_text!r}")
+        previews.append(f"{name}: {raw_text}")
 
-            digits = re.sub(r"\D", "", raw_text)
+        # Accept only standalone eight-digit sequences.
+        matches = re.findall(r"(?<!\d)\d{8}(?!\d)", raw_text)
+        candidates.extend(matches)
 
-            print(
-                f"OCR {variant_name}, PSM {psm}: "
-                f"raw={raw_text!r}, digits={digits!r}"
-            )
+    print("OCR CANDIDATES:", candidates)
 
-            previews.append(
-                f"[{variant_name}/psm{psm}] {raw_text}"
-            )
+    if not candidates:
+        return None, "\n".join(previews)[:500]
 
-            # Only accept an exact eight-digit result.
-            if re.fullmatch(r"\d{8}", digits):
-                candidates.append(digits)
+    counts = Counter(candidates)
+    best_id, best_count = counts.most_common(1)[0]
 
-    # Prefer the most frequently returned exact eight-digit candidate.
-    if candidates:
-        counts = {}
-        for candidate in candidates:
-            counts[candidate] = counts.get(candidate, 0) + 1
+    # If different IDs have equal support, don't guess.
+    tied = [
+        candidate
+        for candidate, count in counts.items()
+        if count == best_count
+    ]
 
-        best_count = max(counts.values())
-        best_candidates = [
-            candidate
-            for candidate, count in counts.items()
-            if count == best_count
-        ]
+    if len(tied) != 1:
+        print("OCR candidates disagree:", dict(counts))
+        return None, "\n".join(previews)[:500]
 
-        # Do not guess if equally supported candidates disagree.
-        if len(best_candidates) == 1:
-            return best_candidates[0], "\n".join(previews)[:500]
-
-        print("OCR candidates disagree:", counts)
-
-    return None, "\n".join(previews)[:500]
+    print("SELECTED ID:", best_id)
+    return best_id, "\n".join(previews)[:500]
 
 
 @app.get("/health")
