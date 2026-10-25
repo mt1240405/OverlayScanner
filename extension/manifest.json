@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Screen to Ctrl+F",
+  "version": "0.2.0",
+  "description": "Receives an ID from the screenshot bridge and searches for it in an open Google Sheets tab.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications",
+    "tabs",
+    "debugger"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://docs.google.com/spreadsheets/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Screen to Ctrl+F",
+    "default_popup": "popup.html"
+  }
+}
