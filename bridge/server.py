@@ -36,6 +36,10 @@ def screenshot():
         return jsonify({"error": "Invalid image"}), 400
 
     text = pytesseract.image_to_string(image, config="--psm 11")
+    print("OCR TEXT:", repr(text))
+    image.save("debug_screenshot.png")
+    print("Screenshot size:", image.size)
+    print("Image mode:", image.mode)
     matches = ID_PATTERN.findall(text.upper())
     found = matches[0] if matches else None
     with lock:

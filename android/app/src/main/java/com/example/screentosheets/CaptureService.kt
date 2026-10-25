@@ -25,6 +25,7 @@ import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
+import android.view.View
 
 class CaptureService : Service() {
     companion object {
@@ -124,66 +125,116 @@ class CaptureService : Service() {
         windowManager.addView(button, params)
     }
 
-    private fun captureAndSend() {
-        overlay?.isEnabled = false
-        executor.execute {
-            try {
-                // Drain stale frames and wait briefly for a frame after the tap.
-                var image = imageReader?.acquireLatestImage()
-                val deadline = System.currentTimeMillis() + 2500
-                while (image == null && System.currentTimeMillis() < deadline) {
-                    Thread.sleep(100)
-                    image = imageReader?.acquireLatestImage()
-                }
-                if (image == null) throw IllegalStateException("No screen frame available")
-                val plane = image.planes[0]
-                val buffer = plane.buffer
-                val pixelStride = plane.pixelStride
-                val rowStride = plane.rowStride
-                val rowPadding = rowStride - pixelStride * width
-                val padded = Bitmap.createBitmap(width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888)
-                padded.copyPixelsFromBuffer(buffer)
-                val bitmap = Bitmap.createBitmap(padded, 0, 0, width, height)
-                image.close()
-                padded.recycle()
 
-                val bytes = ByteArrayOutputStream().use { out ->
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-                    bitmap.recycle()
-                    out.toByteArray()
-                }
-                val boundary = "screenToCtrlFBoundary"
-                val conn = URL(Config.BRIDGE_BASE_URL.trimEnd('/') + "/screenshot").openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.connectTimeout = 10000
-                conn.readTimeout = 20000
-                conn.doOutput = true
-                conn.setRequestProperty("Authorization", "Bearer " + Config.BRIDGE_TOKEN)
-                conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-                conn.outputStream.use { out ->
-                    out.write("--$boundary\r\n".toByteArray())
-                    out.write("Content-Disposition: form-data; name=\"image\"; filename=\"screen.png\"\r\n".toByteArray())
-                    out.write("Content-Type: image/png\r\n\r\n".toByteArray())
-                    out.write(bytes)
-                    out.write("\r\n--$boundary--\r\n".toByteArray())
-                }
-                val responseCode = conn.responseCode
-                val response = (if (responseCode in 200..299) conn.inputStream else conn.errorStream)
-                    .bufferedReader().use { it.readText() }
-                conn.disconnect()
-                mainHandler.post {
-                    overlay?.text = if (responseCode in 200..299) "Sent ✓" else "Retry"
-                    overlay?.isEnabled = true
-                    mainHandler.postDelayed({ overlay?.text = "Find ID" }, 1800)
-                }
-            } catch (e: Exception) {
-                mainHandler.post {
-                    overlay?.text = "Retry"
-                    overlay?.isEnabled = true
-                }
+private fun captureAndSend() {
+    overlay?.isEnabled = false
+    overlay?.visibility = View.INVISIBLE
+
+    executor.execute {
+        var image: android.media.Image? = null
+
+        try {
+            // Allow the screen to update after hiding the floating button.
+            Thread.sleep(300)
+
+            // Acquire the most recent screen frame.
+            val deadline = System.currentTimeMillis() + 2500
+            while (image == null && System.currentTimeMillis() < deadline) {
+                image = imageReader?.acquireLatestImage()
+                if (image == null) Thread.sleep(100)
+            }
+
+            if (image == null) {
+                throw IllegalStateException("No screen frame available")
+            }
+
+            val plane = image.planes[0]
+            val buffer = plane.buffer
+            val pixelStride = plane.pixelStride
+            val rowStride = plane.rowStride
+            val rowPadding = rowStride - pixelStride * width
+
+            val padded = Bitmap.createBitmap(
+                width + rowPadding / pixelStride,
+                height,
+                Bitmap.Config.ARGB_8888
+            )
+
+            padded.copyPixelsFromBuffer(buffer)
+            image.close()
+            image = null
+
+            val bitmap = Bitmap.createBitmap(padded, 0, 0, width, height)
+            padded.recycle()
+
+            val bytes = ByteArrayOutputStream().use { out ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                bitmap.recycle()
+                out.toByteArray()
+            }
+
+            val boundary = "screenToCtrlFBoundary"
+            val conn = URL(
+                Config.BRIDGE_BASE_URL.trimEnd('/') + "/screenshot"
+            ).openConnection() as HttpURLConnection
+
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 10000
+            conn.readTimeout = 20000
+            conn.doOutput = true
+            conn.setRequestProperty(
+                "Authorization", "Bearer " + Config.BRIDGE_TOKEN
+            )
+            conn.setRequestProperty(
+                "Content-Type", "multipart/form-data; boundary=$boundary"
+            )
+
+            conn.outputStream.use { out ->
+                out.write("--$boundary\r\n".toByteArray())
+                out.write(
+                    "Content-Disposition: form-data; name=\"image\"; filename=\"screen.png\"\r\n".toByteArray()
+                )
+                out.write("Content-Type: image/png\r\n\r\n".toByteArray())
+                out.write(bytes)
+                out.write("\r\n--$boundary--\r\n".toByteArray())
+            }
+
+            val responseCode = conn.responseCode
+            val response = (
+                if (responseCode in 200..299) conn.inputStream
+                else conn.errorStream
+            ).bufferedReader().use { it.readText() }
+
+            android.util.Log.d(
+                "ScreenToCtrlF",
+                "Bridge response: $responseCode $response"
+            )
+            conn.disconnect()
+
+            mainHandler.post {
+                overlay?.visibility = View.VISIBLE
+                overlay?.text = if (responseCode in 200..299) "Sent ✓" else "Retry"
+                overlay?.isEnabled = true
+                mainHandler.postDelayed({
+                    overlay?.text = "Find ID"
+                }, 1800)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ScreenToCtrlF", "Capture failed", e)
+
+            mainHandler.post {
+                overlay?.visibility = View.VISIBLE
+                overlay?.text = "Retry"
+                overlay?.isEnabled = true
+            }
+        } finally {
+            try {
+                image?.close()
+            } catch (_: Exception) {
             }
         }
     }
+}
 
     override fun onDestroy() {
         try { overlay?.let { windowManager.removeView(it) } } catch (_: Exception) {}
