@@ -6,6 +6,11 @@ from flask import Flask, request, jsonify, abort
 from PIL import Image
 import pytesseract
 
+pytesseract.pytesseract.tesseract_cmd = os.environ.get(
+    "TESSERACT_CMD",
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+)
+
 app = Flask(__name__)
 TOKEN = os.environ.get("BRIDGE_TOKEN", "change-this-dev-token")
 ID_PATTERN = re.compile(r"\b\d{8}\b")
