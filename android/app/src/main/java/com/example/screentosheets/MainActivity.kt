@@ -50,7 +50,7 @@ class MainActivity : Activity() {
 
         hostInput = EditText(this).apply {
             hint = "Bridge IP address (e.g. 192.168.1.25)"
-            singleLine = true
+            maxLines = 1
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             setText(bridgePrefs.getString(Config.KEY_BRIDGE_HOST, "") ?: "")
         }
@@ -58,7 +58,7 @@ class MainActivity : Activity() {
 
         portInput = EditText(this).apply {
             hint = "Bridge port"
-            singleLine = true
+            maxLines = 1
             inputType = InputType.TYPE_CLASS_NUMBER
             setText(bridgePrefs.getString(Config.KEY_BRIDGE_PORT, Config.DEFAULT_BRIDGE_PORT)
                 ?: Config.DEFAULT_BRIDGE_PORT)
@@ -67,7 +67,7 @@ class MainActivity : Activity() {
 
         tokenInput = EditText(this).apply {
             hint = "Bridge secret token"
-            singleLine = true
+            maxLines = 1
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             setText(bridgePrefs.getString(Config.KEY_BRIDGE_TOKEN, "") ?: "")
         }
