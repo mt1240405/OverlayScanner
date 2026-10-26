@@ -173,17 +173,26 @@ private fun captureAndSend() {
                 out.toByteArray()
             }
 
+            val prefs = getSharedPreferences(Config.PREFS_NAME, Context.MODE_PRIVATE)
+            val host = prefs.getString(Config.KEY_BRIDGE_HOST, "").orEmpty()
+            val port = prefs.getString(Config.KEY_BRIDGE_PORT, Config.DEFAULT_BRIDGE_PORT).orEmpty()
+            val token = prefs.getString(Config.KEY_BRIDGE_TOKEN, "").orEmpty()
+
+            val portNumber = port.toIntOrNull()
+            if (host.isBlank() || token.isBlank() || portNumber == null || portNumber !in 1..65535) {
+                throw IllegalStateException("Bridge settings are missing or invalid. Open the app and save them first.")
+            }
+
             val boundary = "screenToCtrlFBoundary"
-            val conn = URL(
-                Config.BRIDGE_BASE_URL.trimEnd('/') + "/screenshot"
-            ).openConnection() as HttpURLConnection
+            val conn = URL("http://$host:$port/screenshot")
+                .openConnection() as HttpURLConnection
 
             conn.requestMethod = "POST"
             conn.connectTimeout = 10000
             conn.readTimeout = 20000
             conn.doOutput = true
             conn.setRequestProperty(
-                "Authorization", "Bearer " + Config.BRIDGE_TOKEN
+                "Authorization", "Bearer " + token
             )
             conn.setRequestProperty(
                 "Content-Type", "multipart/form-data; boundary=$boundary"

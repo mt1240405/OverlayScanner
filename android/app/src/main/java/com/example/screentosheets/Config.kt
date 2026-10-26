@@ -1,8 +1,13 @@
 package com.example.screentosheets
 
+/**
+ * Names used to store bridge settings in app-private SharedPreferences.
+ * No IP address or authentication token is compiled into the app.
+ */
 object Config {
-    // Replace with your computer's LAN IPv4 address, not localhost.
-    const val BRIDGE_BASE_URL = "http://10.197.213.46:8765"
-    // Must match the BRIDGE_TOKEN environment variable used to start bridge/server.py.
-    const val BRIDGE_TOKEN = "USE_YOUR_TOKEN"
+    const val PREFS_NAME = "bridge_settings"
+    const val KEY_BRIDGE_HOST = "bridge_host"
+    const val KEY_BRIDGE_PORT = "bridge_port"
+    const val KEY_BRIDGE_TOKEN = "bridge_token"
+    const val DEFAULT_BRIDGE_PORT = "8765"
 }
